@@ -66,7 +66,7 @@ func NewController(clk clock.Clock, kubeClient client.Client, cluster *state.Clu
 		drift:         &Drift{cloudProvider: cloudProvider},
 		expiration:    &Expiration{kubeClient: kubeClient, clock: clk},
 		emptiness:     &Emptiness{kubeClient: kubeClient, cluster: cluster, clock: clk},
-    		consolidation: &Consolidation{kubeClient: kubeClient, cluster: cluster, clock: clk},
+		consolidation: &Consolidation{kubeClient: kubeClient, cluster: cluster, clock: clk},
 	})
 }
 
