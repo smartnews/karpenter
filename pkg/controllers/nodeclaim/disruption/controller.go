@@ -52,9 +52,10 @@ type Controller struct {
 	kubeClient    client.Client
 	cloudProvider cloudprovider.CloudProvider
 
-	drift      *Drift
-	expiration *Expiration
-	emptiness  *Emptiness
+	drift         *Drift
+	expiration    *Expiration
+	emptiness     *Emptiness
+	consolidation *Consolidation
 }
 
 // NewController constructs a nodeclaim disruption controller
@@ -65,6 +66,7 @@ func NewController(clk clock.Clock, kubeClient client.Client, cluster *state.Clu
 		drift:         &Drift{cloudProvider: cloudProvider},
 		expiration:    &Expiration{kubeClient: kubeClient, clock: clk},
 		emptiness:     &Emptiness{kubeClient: kubeClient, cluster: cluster, clock: clk},
+    		consolidation: &Consolidation{kubeClient: kubeClient, cluster: cluster, clock: clk},
 	})
 }
 
@@ -89,6 +91,7 @@ func (c *Controller) Reconcile(ctx context.Context, nodeClaim *v1beta1.NodeClaim
 		c.expiration,
 		c.drift,
 		c.emptiness,
+		c.consolidation,
 	}
 	for _, reconciler := range reconcilers {
 		res, err := reconciler.Reconcile(ctx, nodePool, nodeClaim)
