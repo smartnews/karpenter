@@ -30,7 +30,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/sets"
-	corev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/tools/record"
 	clock "k8s.io/utils/clock/testing"
 	. "knative.dev/pkg/logging/testing"
@@ -77,7 +76,7 @@ var _ = BeforeSuite(func() {
 	fakeClock = clock.NewFakeClock(time.Now())
 	cluster = state.NewCluster(fakeClock, env.Client, cloudProvider)
 	nodeController = informer.NewNodeController(env.Client, cluster)
-	prov = provisioning.NewProvisioner(env.Client, corev1.NewForConfigOrDie(env.Config), events.NewRecorder(&record.FakeRecorder{}), cloudProvider, cluster)
+	prov = provisioning.NewProvisioner(env.Client, events.NewRecorder(&record.FakeRecorder{}), cloudProvider, cluster)
 	daemonsetController = informer.NewDaemonSetController(env.Client, cluster)
 	instanceTypes, _ := cloudProvider.GetInstanceTypes(ctx, nil)
 	instanceTypeMap = map[string]*cloudprovider.InstanceType{}
@@ -225,11 +224,13 @@ var _ = Describe("Provisioning", func() {
 				Template: v1beta1.NodeClaimTemplate{
 					Spec: v1beta1.NodeClaimSpec{
 						Kubelet: &v1beta1.KubeletConfiguration{MaxPods: ptr.Int32(1)},
-						Requirements: []v1.NodeSelectorRequirement{
+						Requirements: []v1beta1.NodeSelectorRequirementWithMinValues{
 							{
-								Key:      v1.LabelInstanceTypeStable,
-								Operator: v1.NodeSelectorOpIn,
-								Values:   []string{"single-pod-instance-type"},
+								NodeSelectorRequirement: v1.NodeSelectorRequirement{
+									Key:      v1.LabelInstanceTypeStable,
+									Operator: v1.NodeSelectorOpIn,
+									Values:   []string{"single-pod-instance-type"},
+								},
 							},
 						},
 					},
@@ -933,13 +934,13 @@ var _ = Describe("Provisioning", func() {
 							Labels: map[string]string{"test-key-1": "test-value-1"},
 						},
 						Spec: v1beta1.NodeClaimSpec{
-							Requirements: []v1.NodeSelectorRequirement{
-								{Key: "test-key-2", Operator: v1.NodeSelectorOpIn, Values: []string{"test-value-2"}},
-								{Key: "test-key-3", Operator: v1.NodeSelectorOpNotIn, Values: []string{"test-value-3"}},
-								{Key: "test-key-4", Operator: v1.NodeSelectorOpLt, Values: []string{"4"}},
-								{Key: "test-key-5", Operator: v1.NodeSelectorOpGt, Values: []string{"5"}},
-								{Key: "test-key-6", Operator: v1.NodeSelectorOpExists},
-								{Key: "test-key-7", Operator: v1.NodeSelectorOpDoesNotExist},
+							Requirements: []v1beta1.NodeSelectorRequirementWithMinValues{
+								{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: "test-key-2", Operator: v1.NodeSelectorOpIn, Values: []string{"test-value-2"}}},
+								{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: "test-key-3", Operator: v1.NodeSelectorOpNotIn, Values: []string{"test-value-3"}}},
+								{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: "test-key-4", Operator: v1.NodeSelectorOpLt, Values: []string{"4"}}},
+								{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: "test-key-5", Operator: v1.NodeSelectorOpGt, Values: []string{"5"}}},
+								{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: "test-key-6", Operator: v1.NodeSelectorOpExists}},
+								{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: "test-key-7", Operator: v1.NodeSelectorOpDoesNotExist}},
 							},
 						},
 					},
@@ -1080,16 +1081,20 @@ var _ = Describe("Provisioning", func() {
 				Spec: v1beta1.NodePoolSpec{
 					Template: v1beta1.NodeClaimTemplate{
 						Spec: v1beta1.NodeClaimSpec{
-							Requirements: []v1.NodeSelectorRequirement{
+							Requirements: []v1beta1.NodeSelectorRequirementWithMinValues{
 								{
-									Key:      "custom-requirement-key",
-									Operator: v1.NodeSelectorOpIn,
-									Values:   []string{"value"},
+									NodeSelectorRequirement: v1.NodeSelectorRequirement{
+										Key:      "custom-requirement-key",
+										Operator: v1.NodeSelectorOpIn,
+										Values:   []string{"value"},
+									},
 								},
 								{
-									Key:      "custom-requirement-key2",
-									Operator: v1.NodeSelectorOpIn,
-									Values:   []string{"value"},
+									NodeSelectorRequirement: v1.NodeSelectorRequirement{
+										Key:      "custom-requirement-key2",
+										Operator: v1.NodeSelectorOpIn,
+										Values:   []string{"value"},
+									},
 								},
 							},
 						},
@@ -1130,11 +1135,13 @@ var _ = Describe("Provisioning", func() {
 				Spec: v1beta1.NodePoolSpec{
 					Template: v1beta1.NodeClaimTemplate{
 						Spec: v1beta1.NodeClaimSpec{
-							Requirements: []v1.NodeSelectorRequirement{
+							Requirements: []v1beta1.NodeSelectorRequirementWithMinValues{
 								{
-									Key:      v1.LabelArchStable,
-									Operator: v1.NodeSelectorOpIn,
-									Values:   []string{"arm64"},
+									NodeSelectorRequirement: v1.NodeSelectorRequirement{
+										Key:      v1.LabelArchStable,
+										Operator: v1.NodeSelectorOpIn,
+										Values:   []string{"arm64"},
+									},
 								},
 							},
 						},
@@ -1167,11 +1174,13 @@ var _ = Describe("Provisioning", func() {
 				Spec: v1beta1.NodePoolSpec{
 					Template: v1beta1.NodeClaimTemplate{
 						Spec: v1beta1.NodeClaimSpec{
-							Requirements: []v1.NodeSelectorRequirement{
+							Requirements: []v1beta1.NodeSelectorRequirementWithMinValues{
 								{
-									Key:      v1.LabelOSStable,
-									Operator: v1.NodeSelectorOpIn,
-									Values:   []string{"ios"},
+									NodeSelectorRequirement: v1.NodeSelectorRequirement{
+										Key:      v1.LabelOSStable,
+										Operator: v1.NodeSelectorOpIn,
+										Values:   []string{"ios"},
+									},
 								},
 							},
 						},
@@ -1531,6 +1540,117 @@ var _ = Describe("Provisioning", func() {
 			node := ExpectScheduled(ctx, env.Client, pod)
 			Expect(node.Labels).To(HaveKeyWithValue(v1.LabelTopologyZone, "test-zone-3"))
 		})
+		DescribeTable("should ignore hostname affinity scheduling when using local path volumes",
+			func(volumeOptions test.PersistentVolumeOptions) {
+				// StorageClass that references "no-provisioner" and is used for local volume storage
+				storageClass = test.StorageClass(test.StorageClassOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "local-path",
+					},
+					Provisioner: lo.ToPtr("kubernetes.io/no-provisioner"),
+				})
+				// Create a PersistentVolume that is using a random node name for its affinity
+				persistentVolume := test.PersistentVolume(volumeOptions)
+				persistentVolume.Spec.NodeAffinity = &v1.VolumeNodeAffinity{
+					Required: &v1.NodeSelector{
+						NodeSelectorTerms: []v1.NodeSelectorTerm{
+							{
+								MatchExpressions: []v1.NodeSelectorRequirement{
+									{
+										Key:      v1.LabelHostname,
+										Operator: v1.NodeSelectorOpIn,
+										Values:   []string{test.RandomName()},
+									},
+								},
+							},
+						},
+					},
+				}
+				persistentVolumeClaim := test.PersistentVolumeClaim(test.PersistentVolumeClaimOptions{VolumeName: persistentVolume.Name, StorageClassName: &storageClass.Name})
+				ExpectApplied(ctx, env.Client, test.NodePool(), storageClass, persistentVolumeClaim, persistentVolume)
+				pod := test.UnschedulablePod(test.PodOptions{
+					PersistentVolumeClaims: []string{persistentVolumeClaim.Name},
+				})
+				ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pod)
+				// Expect that we are still able to schedule this pod to a node, even though we had a hostname affinity on it
+				ExpectScheduled(ctx, env.Client, pod)
+			},
+			Entry("when using local volumes", test.PersistentVolumeOptions{UseLocal: true}),
+			Entry("when using hostpath volumes", test.PersistentVolumeOptions{UseHostPath: true}),
+		)
+		DescribeTable("should ignore hostname affinity scheduling when using local path volumes (ephemeral volume)",
+			func(volumeOptions test.PersistentVolumeOptions) {
+				// StorageClass that references "no-provisioner" and is used for local volume storage
+				storageClass = test.StorageClass(test.StorageClassOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: "local-path",
+					},
+					Provisioner: lo.ToPtr("kubernetes.io/no-provisioner"),
+				})
+				pod := test.UnschedulablePod(test.PodOptions{
+					EphemeralVolumeTemplates: []test.EphemeralVolumeTemplateOptions{
+						{
+							StorageClassName: &storageClass.Name,
+						},
+					},
+				})
+				persistentVolume := test.PersistentVolume(volumeOptions)
+				persistentVolume.Spec.NodeAffinity = &v1.VolumeNodeAffinity{
+					Required: &v1.NodeSelector{
+						NodeSelectorTerms: []v1.NodeSelectorTerm{
+							{
+								MatchExpressions: []v1.NodeSelectorRequirement{
+									{
+										Key:      v1.LabelHostname,
+										Operator: v1.NodeSelectorOpIn,
+										Values:   []string{test.RandomName()},
+									},
+								},
+							},
+						},
+					},
+				}
+				persistentVolumeClaim := test.PersistentVolumeClaim(test.PersistentVolumeClaimOptions{
+					ObjectMeta: metav1.ObjectMeta{
+						Name: fmt.Sprintf("%s-%s", pod.Name, pod.Spec.Volumes[0].Name),
+					},
+					VolumeName:       persistentVolume.Name,
+					StorageClassName: &storageClass.Name,
+				})
+				ExpectApplied(ctx, env.Client, test.NodePool(), storageClass, pod, persistentVolumeClaim, persistentVolume)
+				ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pod)
+				ExpectScheduled(ctx, env.Client, pod)
+			},
+			Entry("when using local volumes", test.PersistentVolumeOptions{UseLocal: true}),
+			Entry("when using hostpath volumes", test.PersistentVolumeOptions{UseHostPath: true}),
+		)
+		It("should not ignore hostname affinity when using non-local path volumes", func() {
+			// This PersistentVolume is going to use a standard CSI volume for provisioning
+			persistentVolume := test.PersistentVolume()
+			persistentVolume.Spec.NodeAffinity = &v1.VolumeNodeAffinity{
+				Required: &v1.NodeSelector{
+					NodeSelectorTerms: []v1.NodeSelectorTerm{
+						{
+							MatchExpressions: []v1.NodeSelectorRequirement{
+								{
+									Key:      v1.LabelHostname,
+									Operator: v1.NodeSelectorOpIn,
+									Values:   []string{test.RandomName()},
+								},
+							},
+						},
+					},
+				},
+			}
+			persistentVolumeClaim := test.PersistentVolumeClaim(test.PersistentVolumeClaimOptions{VolumeName: persistentVolume.Name, StorageClassName: &storageClass.Name})
+			ExpectApplied(ctx, env.Client, test.NodePool(), storageClass, persistentVolumeClaim, persistentVolume)
+			pod := test.UnschedulablePod(test.PodOptions{
+				PersistentVolumeClaims: []string{persistentVolumeClaim.Name},
+			})
+			ExpectProvisioned(ctx, env.Client, cluster, cloudProvider, prov, pod)
+			// Expect that this pod can't schedule because we have a hostname affinity, and we don't currently have a pod that we can schedule to
+			ExpectNotScheduled(ctx, env.Client, pod)
+		})
 		It("should not schedule if volume zones are incompatible", func() {
 			persistentVolume := test.PersistentVolume(test.PersistentVolumeOptions{Zones: []string{"test-zone-3"}})
 			persistentVolumeClaim := test.PersistentVolumeClaim(test.PersistentVolumeClaimOptions{VolumeName: persistentVolume.Name, StorageClassName: &storageClass.Name})
@@ -1615,7 +1735,7 @@ var _ = Describe("Provisioning", func() {
 					Spec: v1beta1.NodePoolSpec{
 						Template: v1beta1.NodeClaimTemplate{
 							Spec: v1beta1.NodeClaimSpec{
-								Requirements: []v1.NodeSelectorRequirement{{Key: v1.LabelTopologyZone, Operator: v1.NodeSelectorOpIn, Values: []string{"test-zone-1"}}},
+								Requirements: []v1beta1.NodeSelectorRequirementWithMinValues{{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: v1.LabelTopologyZone, Operator: v1.NodeSelectorOpIn, Values: []string{"test-zone-1"}}}},
 							},
 						},
 					},
@@ -1691,7 +1811,7 @@ var _ = Describe("Provisioning", func() {
 					Spec: v1beta1.NodePoolSpec{
 						Template: v1beta1.NodeClaimTemplate{
 							Spec: v1beta1.NodeClaimSpec{
-								Requirements: []v1.NodeSelectorRequirement{{Key: v1.LabelTopologyZone, Operator: v1.NodeSelectorOpIn, Values: []string{"test-zone-1", "test-zone-2"}}},
+								Requirements: []v1beta1.NodeSelectorRequirementWithMinValues{{NodeSelectorRequirement: v1.NodeSelectorRequirement{Key: v1.LabelTopologyZone, Operator: v1.NodeSelectorOpIn, Values: []string{"test-zone-1", "test-zone-2"}}}},
 							},
 						},
 					},
@@ -1810,7 +1930,7 @@ var _ = Describe("Provisioning", func() {
 func ExpectNodeClaimRequirements(nodeClaim *v1beta1.NodeClaim, requirements ...v1.NodeSelectorRequirement) {
 	GinkgoHelper()
 	for _, requirement := range requirements {
-		req, ok := lo.Find(nodeClaim.Spec.Requirements, func(r v1.NodeSelectorRequirement) bool {
+		req, ok := lo.Find(nodeClaim.Spec.Requirements, func(r v1beta1.NodeSelectorRequirementWithMinValues) bool {
 			return r.Key == requirement.Key && r.Operator == requirement.Operator
 		})
 		Expect(ok).To(BeTrue())

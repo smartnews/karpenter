@@ -29,6 +29,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -118,6 +119,10 @@ func (c CloudProvider) Name() string {
 	return "kwok"
 }
 
+func (c CloudProvider) GetSupportedNodeClasses() []schema.GroupVersionKind {
+	return []schema.GroupVersionKind{}
+}
+
 func (c CloudProvider) getInstanceType(instanceTypeName string) (*cloudprovider.InstanceType, error) {
 	it, found := lo.Find(c.instanceTypes, func(it *cloudprovider.InstanceType) bool {
 		return it.Name == instanceTypeName
@@ -134,12 +139,12 @@ func (c CloudProvider) toNode(nodeClaim *v1beta1.NodeClaim) (*v1.Node, error) {
 	newName = fmt.Sprintf("%s-%d", newName, rand.Uint32())
 
 	capacityType := v1beta1.CapacityTypeOnDemand
-	requirements := scheduling.NewNodeSelectorRequirements(nodeClaim.
+	requirements := scheduling.NewNodeSelectorRequirementsWithMinValues(nodeClaim.
 		Spec.Requirements...)
 	if requirements.Get(v1beta1.CapacityTypeLabelKey).Has(v1beta1.CapacityTypeSpot) {
 		capacityType = v1beta1.CapacityTypeSpot
 	}
-	req, found := lo.Find(nodeClaim.Spec.Requirements, func(req v1.NodeSelectorRequirement) bool {
+	req, found := lo.Find(nodeClaim.Spec.Requirements, func(req v1beta1.NodeSelectorRequirementWithMinValues) bool {
 		return req.Key == v1.LabelInstanceTypeStable
 	})
 	if !found {

@@ -65,7 +65,7 @@ func (r *Registration) Reconcile(ctx context.Context, nodeClaim *v1beta1.NodeCla
 	if err = r.syncNode(ctx, nodeClaim, node); err != nil {
 		return reconcile.Result{}, fmt.Errorf("syncing node, %w", err)
 	}
-	logging.FromContext(ctx).Debugf("registered nodeclaim")
+	logging.FromContext(ctx).Infof("registered nodeclaim")
 	nodeClaim.StatusConditions().MarkTrue(v1beta1.Registered)
 	nodeClaim.Status.NodeName = node.Name
 
@@ -92,7 +92,7 @@ func (r *Registration) syncNode(ctx context.Context, nodeClaim *v1beta1.NodeClai
 		v1beta1.NodeRegisteredLabelKey: "true",
 	})
 	if !equality.Semantic.DeepEqual(stored, node) {
-		if err := r.kubeClient.Patch(ctx, node, client.MergeFrom(stored)); err != nil {
+		if err := r.kubeClient.Patch(ctx, node, client.StrategicMergeFrom(stored)); err != nil {
 			return fmt.Errorf("syncing node labels, %w", err)
 		}
 	}

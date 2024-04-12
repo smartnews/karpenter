@@ -89,7 +89,7 @@ var _ = BeforeSuite(func() {
 	nodeStateController = informer.NewNodeController(env.Client, cluster)
 	nodeClaimStateController = informer.NewNodeClaimController(env.Client, cluster)
 	recorder = test.NewEventRecorder()
-	prov = provisioning.NewProvisioner(env.Client, env.KubernetesInterface.CoreV1(), recorder, cloudProvider, cluster)
+	prov = provisioning.NewProvisioner(env.Client, recorder, cloudProvider, cluster)
 	queue = orchestration.NewTestingQueue(env.Client, recorder, cluster, fakeClock, prov)
 	disruptionController = disruption.NewController(fakeClock, env.Client, prov, cloudProvider, recorder, cluster, queue)
 })
@@ -148,17 +148,21 @@ var _ = BeforeEach(func() {
 
 var _ = AfterEach(func() {
 	ExpectCleanedUp(ctx, env.Client)
+
+	// Reset the metrics collectors
+	disruption.ActionsPerformedCounter.Reset()
+	disruption.NodesDisruptedCounter.Reset()
+	disruption.PodsDisruptedCounter.Reset()
 })
 
 var _ = Describe("Simulate Scheduling", func() {
 	var nodePool *v1beta1.NodePool
-	var nodeClaims []*v1beta1.NodeClaim
-	var nodes []*v1.Node
-	var numNodes int
 	BeforeEach(func() {
-		numNodes = 10
 		nodePool = test.NodePool()
-		nodeClaims, nodes = test.NodeClaimsAndNodes(numNodes, v1beta1.NodeClaim{
+	})
+	It("should allow pods on deleting nodes to reschedule to uninitialized nodes", func() {
+		numNodes := 10
+		nodeClaims, nodes := test.NodeClaimsAndNodes(numNodes, v1beta1.NodeClaim{
 			ObjectMeta: metav1.ObjectMeta{
 				Finalizers: []string{"karpenter.sh/test-finalizer"},
 				Labels: map[string]string{
@@ -184,8 +188,6 @@ var _ = Describe("Simulate Scheduling", func() {
 		// inform cluster state about nodes and nodeclaims
 		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
 
-	})
-	It("should allow pods on deleting nodes to reschedule to uninitialized nodes", func() {
 		pod := test.Pod(test.PodOptions{
 			ResourceRequirements: v1.ResourceRequirements{
 				Requests: v1.ResourceList{
@@ -229,6 +231,33 @@ var _ = Describe("Simulate Scheduling", func() {
 		Expect(results.PodErrors[pod]).To(BeNil())
 	})
 	It("should allow multiple replace operations to happen successively", func() {
+		numNodes := 10
+		nodeClaims, nodes := test.NodeClaimsAndNodes(numNodes, v1beta1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Finalizers: []string{"karpenter.sh/test-finalizer"},
+				Labels: map[string]string{
+					v1beta1.NodePoolLabelKey:     nodePool.Name,
+					v1.LabelInstanceTypeStable:   mostExpensiveInstance.Name,
+					v1beta1.CapacityTypeLabelKey: mostExpensiveOffering.CapacityType,
+					v1.LabelTopologyZone:         mostExpensiveOffering.Zone,
+				},
+			},
+			Status: v1beta1.NodeClaimStatus{
+				Allocatable: map[v1.ResourceName]resource.Quantity{
+					v1.ResourceCPU:  resource.MustParse("3"),
+					v1.ResourcePods: resource.MustParse("100"),
+				},
+			},
+		})
+		ExpectApplied(ctx, env.Client, nodePool)
+
+		for i := 0; i < numNodes; i++ {
+			ExpectApplied(ctx, env.Client, nodeClaims[i], nodes[i])
+		}
+
+		// inform cluster state about nodes and nodeclaims
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, nodes, nodeClaims)
+
 		// Create a pod for each node
 		pods := test.Pods(10, test.PodOptions{
 			ResourceRequirements: v1.ResourceRequirements{
@@ -239,9 +268,11 @@ var _ = Describe("Simulate Scheduling", func() {
 			},
 		})
 		// Set a partition so that each node pool fits one node
-		nodePool.Spec.Template.Spec.Requirements = append(nodePool.Spec.Template.Spec.Requirements, v1.NodeSelectorRequirement{
-			Key:      "test-partition",
-			Operator: v1.NodeSelectorOpExists,
+		nodePool.Spec.Template.Spec.Requirements = append(nodePool.Spec.Template.Spec.Requirements, v1beta1.NodeSelectorRequirementWithMinValues{
+			NodeSelectorRequirement: v1.NodeSelectorRequirement{
+				Key:      "test-partition",
+				Operator: v1.NodeSelectorOpExists,
+			},
 		})
 		nodePool.Spec.Disruption.ExpireAfter = v1beta1.NillableDuration{Duration: lo.ToPtr(5 * time.Minute)}
 		nodePool.Spec.Disruption.ConsolidateAfter = &v1beta1.NillableDuration{Duration: nil}
@@ -288,7 +319,7 @@ var _ = Describe("Simulate Scheduling", func() {
 		})
 		Expect(new).To(BeTrue())
 		// which needs to be deployed
-		ExpectNodeClaimDeployed(ctx, env.Client, cluster, cloudProvider, nc)
+		ExpectNodeClaimDeployedAndStateUpdated(ctx, env.Client, cluster, cloudProvider, nc)
 		nodeClaimNames[nc.Name] = struct{}{}
 
 		ExpectTriggerVerifyAction(&wg)
@@ -303,7 +334,7 @@ var _ = Describe("Simulate Scheduling", func() {
 			return !ok
 		})
 		Expect(new).To(BeTrue())
-		ExpectNodeClaimDeployed(ctx, env.Client, cluster, cloudProvider, nc)
+		ExpectNodeClaimDeployedAndStateUpdated(ctx, env.Client, cluster, cloudProvider, nc)
 		nodeClaimNames[nc.Name] = struct{}{}
 
 		ExpectTriggerVerifyAction(&wg)
@@ -318,7 +349,7 @@ var _ = Describe("Simulate Scheduling", func() {
 			return !ok
 		})
 		Expect(new).To(BeTrue())
-		ExpectNodeClaimDeployed(ctx, env.Client, cluster, cloudProvider, nc)
+		ExpectNodeClaimDeployedAndStateUpdated(ctx, env.Client, cluster, cloudProvider, nc)
 		nodeClaimNames[nc.Name] = struct{}{}
 
 		// Try one more time, but fail since the budgets only allow 3 disruptions.
@@ -328,6 +359,101 @@ var _ = Describe("Simulate Scheduling", func() {
 
 		ncs = ExpectNodeClaims(ctx, env.Client)
 		Expect(len(ncs)).To(Equal(13))
+	})
+	It("can replace node with a local PV (ignoring hostname affinity)", func() {
+		nodeClaim, node := test.NodeClaimAndNode(v1beta1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					v1beta1.NodePoolLabelKey:     nodePool.Name,
+					v1.LabelInstanceTypeStable:   mostExpensiveInstance.Name,
+					v1beta1.CapacityTypeLabelKey: mostExpensiveOffering.CapacityType,
+					v1.LabelTopologyZone:         mostExpensiveOffering.Zone,
+				},
+			},
+			Status: v1beta1.NodeClaimStatus{
+				Allocatable: map[v1.ResourceName]resource.Quantity{
+					v1.ResourceCPU:  resource.MustParse("32"),
+					v1.ResourcePods: resource.MustParse("100"),
+				},
+			},
+		})
+		labels := map[string]string{
+			"app": "test",
+		}
+		// create our RS so we can link a pod to it
+		ss := test.StatefulSet()
+		ExpectApplied(ctx, env.Client, ss)
+
+		// StorageClass that references "no-provisioner" and is used for local volume storage
+		storageClass := test.StorageClass(test.StorageClassOptions{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "local-path",
+			},
+			Provisioner: lo.ToPtr("kubernetes.io/no-provisioner"),
+		})
+		persistentVolume := test.PersistentVolume(test.PersistentVolumeOptions{UseLocal: true})
+		persistentVolume.Spec.NodeAffinity = &v1.VolumeNodeAffinity{
+			Required: &v1.NodeSelector{
+				NodeSelectorTerms: []v1.NodeSelectorTerm{
+					{
+						// This PV is only valid for use against this node
+						MatchExpressions: []v1.NodeSelectorRequirement{
+							{
+								Key:      v1.LabelHostname,
+								Operator: v1.NodeSelectorOpIn,
+								Values:   []string{node.Name},
+							},
+						},
+					},
+				},
+			},
+		}
+		persistentVolumeClaim := test.PersistentVolumeClaim(test.PersistentVolumeClaimOptions{VolumeName: persistentVolume.Name, StorageClassName: &storageClass.Name})
+		pod := test.Pod(test.PodOptions{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion:         "apps/v1",
+						Kind:               "StatefulSet",
+						Name:               ss.Name,
+						UID:                ss.UID,
+						Controller:         ptr.Bool(true),
+						BlockOwnerDeletion: ptr.Bool(true),
+					},
+				},
+			},
+			PersistentVolumeClaims: []string{persistentVolumeClaim.Name},
+		})
+		ExpectApplied(ctx, env.Client, ss, pod, nodeClaim, node, nodePool, storageClass, persistentVolume, persistentVolumeClaim)
+
+		// bind pods to node
+		ExpectManualBinding(ctx, env.Client, pod, node)
+
+		// inform cluster state about nodes and nodeclaims
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*v1.Node{node}, []*v1beta1.NodeClaim{nodeClaim})
+
+		// disruption won't delete the old node until the new node is ready
+		var wg sync.WaitGroup
+		ExpectTriggerVerifyAction(&wg)
+		ExpectMakeNewNodeClaimsReady(ctx, env.Client, &wg, cluster, cloudProvider, 1)
+		ExpectReconcileSucceeded(ctx, disruptionController, types.NamespacedName{})
+		wg.Wait()
+
+		// Process the item so that the nodes can be deleted.
+		ExpectReconcileSucceeded(ctx, queue, types.NamespacedName{})
+		// Cascade any deletion of the nodeClaim to the node
+		ExpectNodeClaimsCascadeDeletion(ctx, env.Client, nodeClaim)
+
+		// Expect that the new nodeClaim was created, and it's different than the original
+		// We should succeed in getting a replacement, since we assume that the node affinity requirement will be invalid
+		// once we spin-down the old node
+		ExpectNotFound(ctx, env.Client, nodeClaim, node)
+		nodeclaims := ExpectNodeClaims(ctx, env.Client)
+		nodes := ExpectNodes(ctx, env.Client)
+		Expect(nodeclaims).To(HaveLen(1))
+		Expect(nodes).To(HaveLen(1))
+		Expect(nodeclaims[0].Name).ToNot(Equal(nodeClaim.Name))
+		Expect(nodes[0].Name).ToNot(Equal(node.Name))
 	})
 })
 
@@ -1361,6 +1487,370 @@ var _ = Describe("Candidate Filtering", func() {
 	})
 })
 
+var _ = Describe("Metrics", func() {
+	var nodePool *v1beta1.NodePool
+	var labels = map[string]string{
+		"app": "test",
+	}
+	BeforeEach(func() {
+		nodePool = test.NodePool(v1beta1.NodePool{
+			Spec: v1beta1.NodePoolSpec{
+				Disruption: v1beta1.Disruption{
+					ConsolidationPolicy: v1beta1.ConsolidationPolicyWhenUnderutilized,
+					// Disrupt away!
+					Budgets: []v1beta1.Budget{{
+						Nodes: "100%",
+					}},
+				},
+			},
+		})
+	})
+	It("should fire metrics for single node empty disruption", func() {
+		nodeClaim, node := test.NodeClaimAndNode(v1beta1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					v1beta1.NodePoolLabelKey:     nodePool.Name,
+					v1.LabelInstanceTypeStable:   mostExpensiveInstance.Name,
+					v1beta1.CapacityTypeLabelKey: mostExpensiveOffering.CapacityType,
+					v1.LabelTopologyZone:         mostExpensiveOffering.Zone,
+				},
+			},
+			Status: v1beta1.NodeClaimStatus{
+				ProviderID: test.RandomProviderID(),
+				Allocatable: map[v1.ResourceName]resource.Quantity{
+					v1.ResourceCPU:  resource.MustParse("32"),
+					v1.ResourcePods: resource.MustParse("100"),
+				},
+			},
+		})
+		nodeClaim.StatusConditions().MarkTrue(v1beta1.Drifted)
+		ExpectApplied(ctx, env.Client, nodeClaim, node, nodePool)
+
+		// inform cluster state about nodes and nodeclaims
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*v1.Node{node}, []*v1beta1.NodeClaim{nodeClaim})
+
+		fakeClock.Step(10 * time.Minute)
+
+		var wg sync.WaitGroup
+		ExpectTriggerVerifyAction(&wg)
+		ExpectReconcileSucceeded(ctx, disruptionController, types.NamespacedName{})
+		wg.Wait()
+
+		ExpectMetricCounterValue("karpenter_disruption_actions_performed_total", 1, map[string]string{
+			"action": "delete",
+			"method": "drift",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_nodes_disrupted_total", 1, map[string]string{
+			"nodepool": nodePool.Name,
+			"action":   "delete",
+			"method":   "drift",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_pods_disrupted_total", 0, map[string]string{
+			"nodepool": nodePool.Name,
+			"action":   "delete",
+			"method":   "drift",
+		})
+	})
+	It("should fire metrics for single node delete disruption", func() {
+		nodeClaims, nodes := test.NodeClaimsAndNodes(2, v1beta1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					v1beta1.NodePoolLabelKey:     nodePool.Name,
+					v1.LabelInstanceTypeStable:   leastExpensiveInstance.Name,
+					v1beta1.CapacityTypeLabelKey: leastExpensiveOffering.CapacityType,
+					v1.LabelTopologyZone:         leastExpensiveOffering.Zone,
+				},
+			},
+			Status: v1beta1.NodeClaimStatus{
+				Allocatable: map[v1.ResourceName]resource.Quantity{
+					v1.ResourceCPU:  resource.MustParse("32"),
+					v1.ResourcePods: resource.MustParse("100"),
+				},
+			},
+		})
+		pods := test.Pods(4, test.PodOptions{})
+
+		nodeClaims[0].StatusConditions().MarkTrue(v1beta1.Drifted)
+
+		ExpectApplied(ctx, env.Client, pods[0], pods[1], pods[2], pods[3], nodeClaims[0], nodes[0], nodeClaims[1], nodes[1], nodePool)
+
+		// bind pods to nodes
+		ExpectManualBinding(ctx, env.Client, pods[0], nodes[0])
+		ExpectManualBinding(ctx, env.Client, pods[1], nodes[0])
+		ExpectManualBinding(ctx, env.Client, pods[2], nodes[1])
+		ExpectManualBinding(ctx, env.Client, pods[3], nodes[1])
+
+		// inform cluster state about nodes and nodeclaims
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*v1.Node{nodes[0], nodes[1]}, []*v1beta1.NodeClaim{nodeClaims[0], nodeClaims[1]})
+
+		fakeClock.Step(10 * time.Minute)
+
+		var wg sync.WaitGroup
+		ExpectTriggerVerifyAction(&wg)
+		ExpectReconcileSucceeded(ctx, disruptionController, types.NamespacedName{})
+		wg.Wait()
+
+		ExpectMetricCounterValue("karpenter_disruption_actions_performed_total", 1, map[string]string{
+			"action": "delete",
+			"method": "drift",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_nodes_disrupted_total", 1, map[string]string{
+			"nodepool": nodePool.Name,
+			"action":   "delete",
+			"method":   "drift",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_pods_disrupted_total", 2, map[string]string{
+			"nodepool": nodePool.Name,
+			"action":   "delete",
+			"method":   "drift",
+		})
+	})
+	It("should fire metrics for single node replace disruption", func() {
+		nodeClaim, node := test.NodeClaimAndNode(v1beta1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					v1beta1.NodePoolLabelKey:     nodePool.Name,
+					v1.LabelInstanceTypeStable:   mostExpensiveInstance.Name,
+					v1beta1.CapacityTypeLabelKey: mostExpensiveOffering.CapacityType,
+					v1.LabelTopologyZone:         mostExpensiveOffering.Zone,
+				},
+			},
+			Status: v1beta1.NodeClaimStatus{
+				ProviderID: test.RandomProviderID(),
+				Allocatable: map[v1.ResourceName]resource.Quantity{
+					v1.ResourceCPU:  resource.MustParse("32"),
+					v1.ResourcePods: resource.MustParse("100"),
+				},
+			},
+		})
+		pods := test.Pods(4, test.PodOptions{})
+		nodeClaim.StatusConditions().MarkTrue(v1beta1.Drifted)
+
+		ExpectApplied(ctx, env.Client, pods[0], pods[1], pods[2], pods[3], nodeClaim, node, nodePool)
+
+		// bind pods to nodes
+		ExpectManualBinding(ctx, env.Client, pods[0], node)
+		ExpectManualBinding(ctx, env.Client, pods[1], node)
+		ExpectManualBinding(ctx, env.Client, pods[2], node)
+		ExpectManualBinding(ctx, env.Client, pods[3], node)
+
+		// inform cluster state about nodes and nodeclaims
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*v1.Node{node}, []*v1beta1.NodeClaim{nodeClaim})
+
+		fakeClock.Step(10 * time.Minute)
+
+		var wg sync.WaitGroup
+		ExpectTriggerVerifyAction(&wg)
+		ExpectReconcileSucceeded(ctx, disruptionController, types.NamespacedName{})
+		wg.Wait()
+
+		ExpectMetricCounterValue("karpenter_disruption_actions_performed_total", 1, map[string]string{
+			"action": "replace",
+			"method": "drift",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_nodes_disrupted_total", 1, map[string]string{
+			"nodepool": nodePool.Name,
+			"action":   "replace",
+			"method":   "drift",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_pods_disrupted_total", 4, map[string]string{
+			"nodepool": nodePool.Name,
+			"action":   "replace",
+			"method":   "drift",
+		})
+	})
+	It("should fire metrics for multi-node empty disruption", func() {
+		nodeClaims, nodes := test.NodeClaimsAndNodes(3, v1beta1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					v1beta1.NodePoolLabelKey:     nodePool.Name,
+					v1.LabelInstanceTypeStable:   leastExpensiveInstance.Name,
+					v1beta1.CapacityTypeLabelKey: leastExpensiveOffering.CapacityType,
+					v1.LabelTopologyZone:         leastExpensiveOffering.Zone,
+				},
+			},
+			Status: v1beta1.NodeClaimStatus{
+				Allocatable: map[v1.ResourceName]resource.Quantity{
+					v1.ResourceCPU:  resource.MustParse("32"),
+					v1.ResourcePods: resource.MustParse("100"),
+				},
+			},
+		})
+		ExpectApplied(ctx, env.Client, nodeClaims[0], nodes[0], nodeClaims[1], nodes[1], nodeClaims[2], nodes[2], nodePool)
+
+		// inform cluster state about nodes and nodeclaims
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*v1.Node{nodes[0], nodes[1], nodes[2]}, []*v1beta1.NodeClaim{nodeClaims[0], nodeClaims[1], nodeClaims[2]})
+
+		fakeClock.Step(10 * time.Minute)
+
+		var wg sync.WaitGroup
+		ExpectTriggerVerifyAction(&wg)
+		ExpectReconcileSucceeded(ctx, disruptionController, client.ObjectKey{})
+		wg.Wait()
+
+		ExpectMetricCounterValue("karpenter_disruption_actions_performed_total", 1, map[string]string{
+			"action":             "delete",
+			"method":             "consolidation",
+			"consolidation_type": "empty",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_nodes_disrupted_total", 3, map[string]string{
+			"nodepool":           nodePool.Name,
+			"action":             "delete",
+			"method":             "consolidation",
+			"consolidation_type": "empty",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_pods_disrupted_total", 0, map[string]string{
+			"nodepool":           nodePool.Name,
+			"action":             "delete",
+			"method":             "consolidation",
+			"consolidation_type": "empty",
+		})
+	})
+	It("should fire metrics for multi-node delete disruption", func() {
+		nodeClaims, nodes := test.NodeClaimsAndNodes(3, v1beta1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					v1beta1.NodePoolLabelKey:     nodePool.Name,
+					v1.LabelInstanceTypeStable:   leastExpensiveInstance.Name,
+					v1beta1.CapacityTypeLabelKey: leastExpensiveOffering.CapacityType,
+					v1.LabelTopologyZone:         leastExpensiveOffering.Zone,
+				},
+			},
+			Status: v1beta1.NodeClaimStatus{
+				Allocatable: map[v1.ResourceName]resource.Quantity{
+					v1.ResourceCPU:  resource.MustParse("32"),
+					v1.ResourcePods: resource.MustParse("100"),
+				},
+			},
+		})
+
+		// create our RS so we can link a pod to it
+		rs := test.ReplicaSet()
+		ExpectApplied(ctx, env.Client, rs)
+		pods := test.Pods(4, test.PodOptions{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion:         "apps/v1",
+						Kind:               "ReplicaSet",
+						Name:               rs.Name,
+						UID:                rs.UID,
+						Controller:         ptr.Bool(true),
+						BlockOwnerDeletion: ptr.Bool(true),
+					},
+				},
+			},
+		})
+
+		ExpectApplied(ctx, env.Client, rs, pods[0], pods[1], pods[2], pods[3], nodeClaims[0], nodes[0], nodeClaims[1], nodes[1], nodeClaims[2], nodes[2], nodePool)
+
+		// bind pods to nodes
+		ExpectManualBinding(ctx, env.Client, pods[0], nodes[0])
+		ExpectManualBinding(ctx, env.Client, pods[1], nodes[1])
+		ExpectManualBinding(ctx, env.Client, pods[2], nodes[2])
+
+		// inform cluster state about nodes and nodeclaims
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*v1.Node{nodes[0], nodes[1], nodes[2]}, []*v1beta1.NodeClaim{nodeClaims[0], nodeClaims[1], nodeClaims[2]})
+
+		fakeClock.Step(10 * time.Minute)
+
+		var wg sync.WaitGroup
+		ExpectTriggerVerifyAction(&wg)
+		ExpectReconcileSucceeded(ctx, disruptionController, client.ObjectKey{})
+		wg.Wait()
+
+		ExpectMetricCounterValue("karpenter_disruption_actions_performed_total", 1, map[string]string{
+			"action":             "delete",
+			"method":             "consolidation",
+			"consolidation_type": "multi",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_nodes_disrupted_total", 2, map[string]string{
+			"nodepool":           nodePool.Name,
+			"action":             "delete",
+			"method":             "consolidation",
+			"consolidation_type": "multi",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_pods_disrupted_total", 2, map[string]string{
+			"nodepool":           nodePool.Name,
+			"action":             "delete",
+			"method":             "consolidation",
+			"consolidation_type": "multi",
+		})
+	})
+	It("should fire metrics for multi-node replace disruption", func() {
+		nodeClaims, nodes := test.NodeClaimsAndNodes(3, v1beta1.NodeClaim{
+			ObjectMeta: metav1.ObjectMeta{
+				Labels: map[string]string{
+					v1beta1.NodePoolLabelKey:     nodePool.Name,
+					v1.LabelInstanceTypeStable:   mostExpensiveInstance.Name,
+					v1beta1.CapacityTypeLabelKey: mostExpensiveOffering.CapacityType,
+					v1.LabelTopologyZone:         mostExpensiveOffering.Zone,
+				},
+			},
+			Status: v1beta1.NodeClaimStatus{
+				Allocatable: map[v1.ResourceName]resource.Quantity{
+					v1.ResourceCPU:  resource.MustParse("32"),
+					v1.ResourcePods: resource.MustParse("100"),
+				},
+			},
+		})
+
+		// create our RS so we can link a pod to it
+		rs := test.ReplicaSet()
+		ExpectApplied(ctx, env.Client, rs)
+		pods := test.Pods(4, test.PodOptions{
+			ObjectMeta: metav1.ObjectMeta{Labels: labels,
+				OwnerReferences: []metav1.OwnerReference{
+					{
+						APIVersion:         "apps/v1",
+						Kind:               "ReplicaSet",
+						Name:               rs.Name,
+						UID:                rs.UID,
+						Controller:         ptr.Bool(true),
+						BlockOwnerDeletion: ptr.Bool(true),
+					},
+				},
+			},
+		})
+
+		ExpectApplied(ctx, env.Client, rs, pods[0], pods[1], pods[2], pods[3], nodeClaims[0], nodes[0], nodeClaims[1], nodes[1], nodeClaims[2], nodes[2], nodePool)
+
+		// bind pods to nodes
+		ExpectManualBinding(ctx, env.Client, pods[0], nodes[0])
+		ExpectManualBinding(ctx, env.Client, pods[1], nodes[1])
+		ExpectManualBinding(ctx, env.Client, pods[2], nodes[2])
+		ExpectManualBinding(ctx, env.Client, pods[3], nodes[2])
+
+		// inform cluster state about nodes and nodeclaims
+		ExpectMakeNodesAndNodeClaimsInitializedAndStateUpdated(ctx, env.Client, nodeStateController, nodeClaimStateController, []*v1.Node{nodes[0], nodes[1], nodes[2]}, []*v1beta1.NodeClaim{nodeClaims[0], nodeClaims[1], nodeClaims[2]})
+
+		fakeClock.Step(10 * time.Minute)
+
+		var wg sync.WaitGroup
+		ExpectTriggerVerifyAction(&wg)
+		ExpectReconcileSucceeded(ctx, disruptionController, client.ObjectKey{})
+		wg.Wait()
+
+		ExpectMetricCounterValue("karpenter_disruption_actions_performed_total", 1, map[string]string{
+			"action":             "replace",
+			"method":             "consolidation",
+			"consolidation_type": "multi",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_nodes_disrupted_total", 3, map[string]string{
+			"nodepool":           nodePool.Name,
+			"action":             "replace",
+			"method":             "consolidation",
+			"consolidation_type": "multi",
+		})
+		ExpectMetricCounterValue("karpenter_disruption_pods_disrupted_total", 4, map[string]string{
+			"nodepool":           nodePool.Name,
+			"action":             "replace",
+			"method":             "consolidation",
+			"consolidation_type": "multi",
+		})
+	})
+})
+
 func leastExpensiveInstanceWithZone(zone string) *cloudprovider.InstanceType {
 	for _, elem := range onDemandInstances {
 		if len(elem.Offerings.Compatible(scheduling.NewRequirements(scheduling.NewRequirement(v1.LabelTopologyZone, v1.NodeSelectorOpIn, zone)))) > 0 {
@@ -1486,7 +1976,7 @@ func ExpectMakeNewNodeClaimsReady(ctx context.Context, c client.Client, wg *sync
 					if existingNodeClaimNames.Has(nc.Name) {
 						continue
 					}
-					nc, n := ExpectNodeClaimDeployed(ctx, c, cluster, cloudProvider, nc)
+					nc, n := ExpectNodeClaimDeployedAndStateUpdated(ctx, c, cluster, cloudProvider, nc)
 					ExpectMakeNodeClaimsInitialized(ctx, c, nc)
 					ExpectMakeNodesInitialized(ctx, c, n)
 

@@ -79,11 +79,11 @@ func (i *Initialization) Reconcile(ctx context.Context, nodeClaim *v1beta1.NodeC
 	stored := node.DeepCopy()
 	node.Labels = lo.Assign(node.Labels, map[string]string{v1beta1.NodeInitializedLabelKey: "true"})
 	if !equality.Semantic.DeepEqual(stored, node) {
-		if err = i.kubeClient.Patch(ctx, node, client.MergeFrom(stored)); err != nil {
+		if err = i.kubeClient.Patch(ctx, node, client.StrategicMergeFrom(stored)); err != nil {
 			return reconcile.Result{}, err
 		}
 	}
-	logging.FromContext(ctx).Infof("initialized nodeclaim")
+	logging.FromContext(ctx).With("allocatable", node.Status.Allocatable).Infof("initialized nodeclaim")
 	nodeClaim.StatusConditions().MarkTrue(v1beta1.Initialized)
 	metrics.NodeClaimsInitializedCounter.With(prometheus.Labels{
 		metrics.NodePoolLabel: nodeClaim.Labels[v1beta1.NodePoolLabelKey],

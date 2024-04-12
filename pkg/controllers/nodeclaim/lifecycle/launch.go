@@ -88,8 +88,9 @@ func (l *Launch) launchNodeClaim(ctx context.Context, nodeClaim *v1beta1.NodeCla
 				return nil, client.IgnoreNotFound(err)
 			}
 			metrics.NodeClaimsTerminatedCounter.With(prometheus.Labels{
-				metrics.ReasonLabel:   "insufficient_capacity",
-				metrics.NodePoolLabel: nodeClaim.Labels[v1beta1.NodePoolLabelKey],
+				metrics.ReasonLabel:       "insufficient_capacity",
+				metrics.NodePoolLabel:     nodeClaim.Labels[v1beta1.NodePoolLabelKey],
+				metrics.CapacityTypeLabel: nodeClaim.Labels[v1beta1.CapacityTypeLabelKey],
 			}).Inc()
 			return nil, nil
 		case cloudprovider.IsNodeClassNotReadyError(err):
@@ -115,7 +116,7 @@ func PopulateNodeClaimDetails(nodeClaim, retrieved *v1beta1.NodeClaim) *v1beta1.
 	// or the static nodeClaim labels
 	nodeClaim.Labels = lo.Assign(
 		retrieved.Labels, // CloudProvider-resolved labels
-		scheduling.NewNodeSelectorRequirements(nodeClaim.Spec.Requirements...).Labels(), // Single-value requirement resolved labels
+		scheduling.NewNodeSelectorRequirementsWithMinValues(nodeClaim.Spec.Requirements...).Labels(), // Single-value requirement resolved labels
 		nodeClaim.Labels, // User-defined labels
 	)
 	nodeClaim.Annotations = lo.Assign(nodeClaim.Annotations, retrieved.Annotations)

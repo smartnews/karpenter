@@ -141,7 +141,7 @@ func (in *NodeClaimSpec) validateRequirements() (errs *apis.FieldError) {
 	return errs
 }
 
-func ValidateRequirement(requirement v1.NodeSelectorRequirement) error { //nolint:gocyclo
+func ValidateRequirement(requirement NodeSelectorRequirementWithMinValues) error { //nolint:gocyclo
 	var errs error
 	if normalized, ok := NormalizedLabels[requirement.Key]; ok {
 		requirement.Key = normalized
@@ -163,6 +163,11 @@ func ValidateRequirement(requirement v1.NodeSelectorRequirement) error { //nolin
 	if requirement.Operator == v1.NodeSelectorOpIn && len(requirement.Values) == 0 {
 		errs = multierr.Append(errs, fmt.Errorf("key %s with operator %s must have a value defined", requirement.Key, requirement.Operator))
 	}
+
+	if requirement.Operator == v1.NodeSelectorOpIn && requirement.MinValues != nil && len(requirement.Values) < lo.FromPtr(requirement.MinValues) {
+		errs = multierr.Append(errs, fmt.Errorf("key %s with operator %s must have at least minimum number of values defined in 'values' field", requirement.Key, requirement.Operator))
+	}
+
 	if requirement.Operator == v1.NodeSelectorOpGt || requirement.Operator == v1.NodeSelectorOpLt {
 		if len(requirement.Values) != 1 {
 			errs = multierr.Append(errs, fmt.Errorf("key %s with operator %s must have a single positive integer value", requirement.Key, requirement.Operator))
@@ -216,13 +221,17 @@ func (in *KubeletConfiguration) validateEvictionSoftPairs() (errs *apis.FieldErr
 	return errs
 }
 
-func validateReservedResources(m v1.ResourceList, fieldName string) (errs *apis.FieldError) {
+func validateReservedResources(m map[string]string, fieldName string) (errs *apis.FieldError) {
 	for k, v := range m {
-		if !SupportedReservedResources.Has(k.String()) {
-			errs = errs.Also(apis.ErrInvalidKeyName(k.String(), fieldName))
+		if !SupportedReservedResources.Has(k) {
+			errs = errs.Also(apis.ErrInvalidKeyName(k, fieldName))
 		}
-		if v.Value() < 0 {
-			errs = errs.Also(apis.ErrInvalidValue(v.String(), fmt.Sprintf(`%s["%s"]`, fieldName, k), "Value cannot be a negative resource quantity"))
+		quantity, err := resource.ParseQuantity(v)
+		if err != nil {
+			errs = errs.Also(apis.ErrInvalidValue(v, fmt.Sprintf(`%s["%s"]`, fieldName, k), "Value must be a quantity value"))
+		}
+		if quantity.Value() < 0 {
+			errs = errs.Also(apis.ErrInvalidValue(v, fmt.Sprintf(`%s["%s"]`, fieldName, k), "Value cannot be a negative resource quantity"))
 		}
 	}
 	return errs
