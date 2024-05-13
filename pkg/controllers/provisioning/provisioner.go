@@ -325,12 +325,12 @@ func (p *Provisioner) Schedule(ctx context.Context) (scheduler.Results, error) {
 	results := s.Solve(ctx, pods).TruncateInstanceTypes(scheduler.MaxInstanceTypes)
 	logging.FromContext(ctx).With("pods", pretty.Slice(
 		lo.Map(pods,
-			func(p *v1.Pod, _ int) string {
-				scheduler.PodHandledEvent(p)
-				return client.ObjectKeyFromObject(p).String()
+			func(pod *v1.Pod, _ int) string {
+				p.recorder.Publish(scheduler.PodHandledEvent(pod))
+				return client.ObjectKeyFromObject(pod).String()
 			}), 5)).
 		With("duration", time.Since(start)).
-		Infof("[recorded event] found provisionable pod(s)")
+		Infof("found provisionable pod(s)")
 	results.Record(ctx, p.recorder, p.cluster)
 	return results, nil
 }
