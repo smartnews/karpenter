@@ -65,7 +65,7 @@ func PodHandledEvent(pod *v1.Pod) events.Event {
 		InvolvedObject: pod,
 		Type:           v1.EventTypeNormal,
 		Reason:         "HandledByKarpenter",
-		Message:        fmt.Sprintf("Pod is handled by karpenter"),
+		Message:        "Pod is handled by karpenter",
 		DedupeValues:   []string{string(pod.UID)},
 		DedupeTimeout:  5 * time.Minute,
 	}
