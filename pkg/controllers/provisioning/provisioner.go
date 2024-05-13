@@ -330,7 +330,7 @@ func (p *Provisioner) Schedule(ctx context.Context) (scheduler.Results, error) {
 				return client.ObjectKeyFromObject(p).String()
 			}), 5)).
 		With("duration", time.Since(start)).
-		Infof("found provisionable pod(s)")
+		Infof("[recorded event] found provisionable pod(s)")
 	results.Record(ctx, p.recorder, p.cluster)
 	return results, nil
 }

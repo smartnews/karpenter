@@ -67,6 +67,6 @@ func PodHandledEvent(pod *v1.Pod) events.Event {
 		Reason:         "HandledByKarpenter",
 		Message:        fmt.Sprintf("Pod is handled by karpenter"),
 		DedupeValues:   []string{string(pod.UID)},
-		RateLimiter:    PodNominationRateLimiter,
+		RateLimiter:    5 * time.Minute,
 	}
 }
