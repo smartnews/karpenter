@@ -160,7 +160,7 @@ func (p *Provisioner) GetPendingPods(ctx context.Context) ([]*v1.Pod, error) {
 	}
 	return lo.Reject(pods, func(po *v1.Pod, _ int) bool {
 		if err := p.Validate(ctx, po); err != nil {
-			logging.FromContext(ctx).With("pod", client.ObjectKeyFromObject(po)).Debugf("ignoring pod, %s", err)
+			logging.FromContext(ctx).With("pod", client.ObjectKeyFromObject(po)).Errorf("ignoring pod, %s", err)
 			return true
 		}
 		p.consolidationWarnings(ctx, po)
