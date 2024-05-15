@@ -421,7 +421,27 @@ func (p *Provisioner) Validate(ctx context.Context, pod *v1.Pod) error {
 		validateNodeSelector(pod),
 		validateAffinity(pod),
 		p.volumeTopology.ValidatePersistentVolumeClaims(ctx, pod),
+		p.isPodHandled(ctx, pod),
 	)
+}
+
+func (p *Provisioner) isPodHandled(ctx context.Context, pod *v1.Pod) (err error) {
+	var events v1.EventList
+	filter := client.MatchingFields{
+		"metadata.namespace":  pod.Namespace,
+		"involvedObject.kind": "Pod",
+		"involvedObject.name": pod.Name,
+		"reason":              "HandledByKarpenter",
+	}
+	if err := p.kubeClient.List(ctx, &events, filter); err == nil {
+		for _, event := range events.Items {
+			// ignore the pod if it's already handled in 3 minute
+			if !time.Now().Add(3 * time.Minute).After(event.LastTimestamp.Time) {
+				return fmt.Errorf("pod is handled")
+			}
+		}
+	}
+	return nil
 }
 
 // validateKarpenterManagedLabelCanExist provides a more clear error message in the event of scheduling a pod that specifically doesn't
