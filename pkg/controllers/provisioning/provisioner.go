@@ -323,12 +323,7 @@ func (p *Provisioner) Schedule(ctx context.Context) (scheduler.Results, error) {
 		return scheduler.Results{}, fmt.Errorf("creating scheduler, %w", err)
 	}
 	results := s.Solve(ctx, pods).TruncateInstanceTypes(scheduler.MaxInstanceTypes)
-	logging.FromContext(ctx).With("pods", pretty.Slice(
-		lo.Map(pods,
-			func(pod *v1.Pod, _ int) string {
-				p.recorder.Publish(scheduler.PodHandledEvent(pod))
-				return client.ObjectKeyFromObject(pod).String()
-			}), 5)).
+	logging.FromContext(ctx).With("pods", pretty.Slice(lo.Map(pods, func(p *v1.Pod, _ int) string { return client.ObjectKeyFromObject(p).String() }), 5)).
 		With("duration", time.Since(start)).
 		Infof("found provisionable pod(s)")
 	results.Record(ctx, p.recorder, p.cluster)
@@ -435,6 +430,7 @@ func (p *Provisioner) isPodHandled(ctx context.Context, pod *v1.Pod) (err error)
 	}
 	logging.FromContext(ctx).Infof("get event for %s/%s", pod.Namespace, pod.Name)
 	if err := p.kubeClient.List(ctx, &events, filter); err == nil {
+		logging.FromContext(ctx).Infof("got events %d", len(events.Items))
 		for _, event := range events.Items {
 			logging.FromContext(ctx).Infof("process event %s", event.Name)
 			// ignore the pod if it's already handled in 3 minute
@@ -443,7 +439,10 @@ func (p *Provisioner) isPodHandled(ctx context.Context, pod *v1.Pod) (err error)
 				return fmt.Errorf("pod is handled")
 			}
 		}
+	} else {
+		logging.FromContext(ctx).Errorf("failed to get event %w", err)
 	}
+	p.recorder.Publish(scheduler.PodHandledEvent(pod))
 	return nil
 }
 
