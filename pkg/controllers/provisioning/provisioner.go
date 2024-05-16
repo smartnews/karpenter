@@ -433,10 +433,13 @@ func (p *Provisioner) isPodHandled(ctx context.Context, pod *v1.Pod) (err error)
 		"involvedObject.name": pod.Name,
 		"reason":              "HandledByKarpenter",
 	}
+	logging.FromContext(ctx).Infof("get event for %s/%s", pod.Namespace, pod.Name)
 	if err := p.kubeClient.List(ctx, &events, filter); err == nil {
 		for _, event := range events.Items {
+			logging.FromContext(ctx).Infof("process event %s", event.Name)
 			// ignore the pod if it's already handled in 3 minute
 			if !time.Now().Add(3 * time.Minute).After(event.LastTimestamp.Time) {
+				logging.FromContext(ctx).Infof("%s/%s is being handled", pod.Namespace, pod.Name)
 				return fmt.Errorf("pod is handled")
 			}
 		}
