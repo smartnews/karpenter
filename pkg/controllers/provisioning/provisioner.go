@@ -310,16 +310,17 @@ func (p *Provisioner) Schedule(ctx context.Context) (scheduler.Results, error) {
 		return scheduler.Results{}, err
 	}
 	pods := append(pendingPods, deletingNodePods...)
+	// filter pods which are alredy handled in last 3 minute
+	targetPods := lo.FilterMap(pods, func(pod *v1.Pod, _ int) (*v1.Pod, bool) {
+		if p.isPodHandled(ctx, pod) {
+			return nil, false
+		}
+		return pod, true
+	})
 	// nothing to schedule, so just return success
-	if len(pods) == 0 {
+	if len(targetPods) == 0 {
 		return scheduler.Results{}, nil
 	}
-	targetPods := lo.FilterMap(pods, func(pod *v1.Pod, _ int) (*v1.Pod, bool) {
-		if !p.isPodHandled(ctx, pod) {
-			return pod, true
-		}
-		return nil, false
-	})
 	s, err := p.NewScheduler(ctx, targetPods, nodes.Active())
 	if err != nil {
 		if errors.Is(err, ErrNodePoolsNotFound) {
@@ -433,12 +434,12 @@ func (p *Provisioner) isPodHandled(ctx context.Context, pod *v1.Pod) bool {
 		"involvedObject.name": pod.Name,
 		"reason":              "HandledByKarpenter",
 	}
-	logging.FromContext(ctx).Infof("get event for %s/%s", pod.Namespace, pod.Name)
+	logging.FromContext(ctx).Debugf("get event for %s/%s", pod.Namespace, pod.Name)
 	if err := p.kubeClient.List(ctx, &events, filter); err == nil {
 		for _, event := range events.Items {
-			logging.FromContext(ctx).Infof("process event %s", event.Name)
+			logging.FromContext(ctx).Infof("found event %s/%s", pod.Namespace, event.Name)
 			// ignore the pod if it's already handled in 3 minute
-			if !time.Now().Add(3 * time.Minute).After(event.LastTimestamp.Time) {
+			if time.Now().Before(event.LastTimestamp.Time.Add(3 * time.Minute)) {
 				logging.FromContext(ctx).Infof("pod %s/%s is handled", pod.Namespace, pod.Name)
 				return true
 			}
