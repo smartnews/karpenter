@@ -160,7 +160,7 @@ func (p *Provisioner) GetPendingPods(ctx context.Context) ([]*v1.Pod, error) {
 	}
 	return lo.Reject(pods, func(po *v1.Pod, _ int) bool {
 		if err := p.Validate(ctx, po); err != nil {
-			logging.FromContext(ctx).With("pod", client.ObjectKeyFromObject(po)).Errorf("ignoring pod, %s", err)
+			logging.FromContext(ctx).With("pod", client.ObjectKeyFromObject(po)).Infof("ignoring pod, %s", err)
 			return true
 		}
 		p.consolidationWarnings(ctx, po)
@@ -423,24 +423,22 @@ func (p *Provisioner) Validate(ctx context.Context, pod *v1.Pod) error {
 func (p *Provisioner) isPodHandled(ctx context.Context, pod *v1.Pod) (err error) {
 	var events v1.EventList
 	filter := client.MatchingFields{
-		"metadata.namespace":  pod.Namespace,
+		"namespace":           pod.Namespace,
 		"involvedObject.kind": "Pod",
 		"involvedObject.name": pod.Name,
 		"reason":              "HandledByKarpenter",
 	}
-	logging.FromContext(ctx).Infof("get event for %s/%s", pod.Namespace, pod.Name)
+	logging.FromContext(ctx).Debugf("get event for %s/%s", pod.Namespace, pod.Name)
 	if err := p.kubeClient.List(ctx, &events, filter); err == nil {
-		logging.FromContext(ctx).Infof("got events %d", len(events.Items))
 		for _, event := range events.Items {
-			logging.FromContext(ctx).Infof("process event %s", event.Name)
+			logging.FromContext(ctx).Debugf("process event %s", event.Name)
 			// ignore the pod if it's already handled in 3 minute
 			if !time.Now().Add(3 * time.Minute).After(event.LastTimestamp.Time) {
-				logging.FromContext(ctx).Infof("%s/%s is being handled", pod.Namespace, pod.Name)
-				return fmt.Errorf("pod is handled")
+				return fmt.Errorf("pod %s/%s is handled", pod.Namespace, pod.Name)
 			}
 		}
 	} else {
-		logging.FromContext(ctx).Errorf("failed to get event %w", err)
+		logging.FromContext(ctx).Errorf("failed to get event for %s/%s: %w", pod.Namespace, pod.Name, err)
 	}
 	p.recorder.Publish(scheduler.PodHandledEvent(pod))
 	return nil
