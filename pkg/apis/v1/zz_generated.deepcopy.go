@@ -62,6 +62,11 @@ func (in *Budget) DeepCopy() *Budget {
 func (in *Disruption) DeepCopyInto(out *Disruption) {
 	*out = *in
 	in.ConsolidateAfter.DeepCopyInto(&out.ConsolidateAfter)
+	if in.UtilizationThreshold != nil {
+		in, out := &in.UtilizationThreshold, &out.UtilizationThreshold
+		*out = new(int)
+		**out = **in
+	}
 	if in.Budgets != nil {
 		in, out := &in.Budgets, &out.Budgets
 		*out = make([]Budget, len(*in))
