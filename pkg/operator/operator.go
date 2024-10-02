@@ -192,6 +192,18 @@ func NewOperator() (context.Context, *Operator) {
 	lo.Must0(mgr.GetFieldIndexer().IndexField(ctx, &v1.Node{}, "spec.providerID", func(o client.Object) []string {
 		return []string{o.(*v1.Node).Spec.ProviderID}
 	}), "failed to setup node provider id indexer")
+	lo.Must0(mgr.GetFieldIndexer().IndexField(ctx, &v1.Event{}, "involvedObject.kind", func(o client.Object) []string {
+		return []string{o.(*v1.Event).InvolvedObject.Kind}
+	}), "failed to setup event kind indexer")
+	lo.Must0(mgr.GetFieldIndexer().IndexField(ctx, &v1.Event{}, "involvedObject.name", func(o client.Object) []string {
+		return []string{o.(*v1.Event).InvolvedObject.Name}
+	}), "failed to setup event name indexer")
+	lo.Must0(mgr.GetFieldIndexer().IndexField(ctx, &v1.Event{}, "namespace", func(o client.Object) []string {
+		return []string{o.(*v1.Event).Namespace}
+	}), "failed to setup event namespace indexer")
+	lo.Must0(mgr.GetFieldIndexer().IndexField(ctx, &v1.Event{}, "reason", func(o client.Object) []string {
+		return []string{o.(*v1.Event).Reason}
+	}), "failed to setup event reason indexer")
 	lo.Must0(mgr.GetFieldIndexer().IndexField(ctx, &v1beta1.NodeClaim{}, "status.providerID", func(o client.Object) []string {
 		return []string{o.(*v1beta1.NodeClaim).Status.ProviderID}
 	}), "failed to setup nodeclaim provider id indexer")

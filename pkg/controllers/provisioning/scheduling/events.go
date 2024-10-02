@@ -59,3 +59,14 @@ func PodFailedToScheduleEvent(pod *v1.Pod, err error) events.Event {
 		DedupeTimeout:  5 * time.Minute,
 	}
 }
+
+func PodHandledEvent(pod *v1.Pod) events.Event {
+	return events.Event{
+		InvolvedObject: pod,
+		Type:           v1.EventTypeNormal,
+		Reason:         "HandledByKarpenter",
+		Message:        "Pod is handled by karpenter",
+		DedupeValues:   []string{string(pod.UID)},
+		DedupeTimeout:  5 * time.Minute,
+	}
+}
