@@ -76,6 +76,12 @@ type Disruption struct {
 	// +kubebuilder:validation:Enum:={WhenEmpty,WhenUnderutilized}
 	// +optional
 	ConsolidationPolicy ConsolidationPolicy `json:"consolidationPolicy,omitempty"`
+	// UtilizationThreshold is defined as sum of requested resources divided by capacity
+	// below which a node can be considered for disruption.
+	// +kubebuilder:validation:Minimum:=1
+	// +kubebuilder:validation:Maximum:=100
+	// +optional
+	UtilizationThreshold *int `json:"utilizationThreshold,omitempty"`
 	// ExpireAfter is the duration the controller will wait
 	// before terminating a node, measured from when the node is created. This
 	// is useful to implement features like eventually consistent node upgrade,
