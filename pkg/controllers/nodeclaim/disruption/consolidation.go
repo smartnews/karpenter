@@ -18,14 +18,21 @@ package disruption
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/samber/lo"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/utils/clock"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	"sigs.k8s.io/karpenter/pkg/utils/node"
+
+	corev1 "k8s.io/api/core/v1"
+
 	v1 "sigs.k8s.io/karpenter/pkg/apis/v1"
+	nodeclaimutil "sigs.k8s.io/karpenter/pkg/utils/nodeclaim"
 )
 
 // Consolidation is a nodeclaim sub-controller that adds or removes status conditions on empty nodeclaims based on consolidateAfter
@@ -69,10 +76,61 @@ func (c *Consolidation) Reconcile(ctx context.Context, nodePool *v1.NodePool, no
 		return reconcile.Result{RequeueAfter: consolidatableTime.Sub(c.clock.Now())}, nil
 	}
 
+	// Get the node to check utilization
+	n, err := nodeclaimutil.NodeForNodeClaim(ctx, c.kubeClient, nodeClaim)
+	if err != nil {
+		if nodeclaimutil.IsDuplicateNodeError(err) || nodeclaimutil.IsNodeNotFoundError(err) {
+			return reconcile.Result{}, nil
+		}
+		return reconcile.Result{}, err
+	}
+	// Check the node utilization if the utilizationThreshold is specified, the node can be disruptted only if the utilization is below the threshold.
+	threshold := nodePool.Spec.Disruption.UtilizationThreshold
+	if threshold != nil {
+		pods, err := node.GetPods(ctx, c.kubeClient, n)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("retrieving node pods, %w", err)
+		}
+		cpu, err := calculateUtilizationOfResource(n, corev1.ResourceCPU, pods)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to calculate CPU, %w", err)
+		}
+		memory, err := calculateUtilizationOfResource(n, corev1.ResourceMemory, pods)
+		if err != nil {
+			return reconcile.Result{}, fmt.Errorf("failed to calculate memory, %w", err)
+		}
+		if cpu > float64(*threshold)/100 || memory > float64(*threshold)/100 {
+			if hasConsolidatableCondition {
+				_ = nodeClaim.StatusConditions().Clear(v1.ConditionTypeConsolidatable)
+				log.FromContext(ctx).V(1).Info("removing consolidatable status condition due to high utilization")
+			}
+		}
+	}
+
 	// 6. Otherwise, add the consolidatable status condition
 	nodeClaim.StatusConditions().SetTrue(v1.ConditionTypeConsolidatable)
 	if !hasConsolidatableCondition {
 		log.FromContext(ctx).V(1).Info("marking consolidatable")
 	}
 	return reconcile.Result{}, nil
+}
+
+// CalculateUtilizationOfResource calculates utilization of a given resource for a node.
+func calculateUtilizationOfResource(node *corev1.Node, resourceName corev1.ResourceName, pods []*corev1.Pod) (float64, error) {
+	allocatable, found := node.Status.Allocatable[resourceName]
+	if !found {
+		return 0, fmt.Errorf("failed to get %v from %s", resourceName, node.Name)
+	}
+	if allocatable.MilliValue() == 0 {
+		return 0, fmt.Errorf("%v is 0 at %s", resourceName, node.Name)
+	}
+	podsRequest := resource.MustParse("0")
+	for _, pod := range pods {
+		for _, container := range pod.Spec.Containers {
+			if resourceValue, found := container.Resources.Requests[resourceName]; found {
+				podsRequest.Add(resourceValue)
+			}
+		}
+	}
+	return float64(podsRequest.MilliValue()) / float64(allocatable.MilliValue()), nil
 }
