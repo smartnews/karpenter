@@ -340,11 +340,18 @@ func (p *Provisioner) Schedule(ctx context.Context) (scheduler.Results, error) {
 		return scheduler.Results{}, err
 	}
 	pods := append(pendingPods, deletingNodePods...)
+	// filter pods which are alredy handled in last 3 minute
+	targetPods := lo.FilterMap(pods, func(pod *corev1.Pod, _ int) (*corev1.Pod, bool) {
+		if p.isPodHandled(ctx, pod) {
+			return nil, false
+		}
+		return pod, true
+	})
 	// nothing to schedule, so just return success
-	if len(pods) == 0 {
+	if len(targetPods) == 0 {
 		return scheduler.Results{}, nil
 	}
-	s, err := p.NewScheduler(ctx, pods, nodes.Active())
+	s, err := p.NewScheduler(ctx, targetPods, nodes.Active())
 	if err != nil {
 		if errors.Is(err, ErrNodePoolsNotFound) {
 			log.FromContext(ctx).Info("no nodepools found")
@@ -352,12 +359,35 @@ func (p *Provisioner) Schedule(ctx context.Context) (scheduler.Results, error) {
 		}
 		return scheduler.Results{}, fmt.Errorf("creating scheduler, %w", err)
 	}
-	results := s.Solve(ctx, pods).TruncateInstanceTypes(scheduler.MaxInstanceTypes)
+	results := s.Solve(ctx, targetPods).TruncateInstanceTypes(scheduler.MaxInstanceTypes)
 	if len(results.NewNodeClaims) > 0 {
-		log.FromContext(ctx).WithValues("Pods", pretty.Slice(lo.Map(pods, func(p *corev1.Pod, _ int) string { return klog.KRef(p.Namespace, p.Name).String() }), 5), "duration", time.Since(start)).Info("found provisionable pod(s)")
+		log.FromContext(ctx).WithValues("Pods", pretty.Slice(lo.Map(targetPods, func(p *corev1.Pod, _ int) string { return klog.KRef(p.Namespace, p.Name).String() }), 5), "duration", time.Since(start)).Info("found provisionable pod(s)")
 	}
 	results.Record(ctx, p.recorder, p.cluster)
 	return results, nil
+}
+
+func (p *Provisioner) isPodHandled(ctx context.Context, pod *corev1.Pod) bool {
+	var events corev1.EventList
+	filter := client.MatchingFields{
+		"namespace":           pod.Namespace,
+		"involvedObject.kind": "Pod",
+		"involvedObject.name": pod.Name,
+		"reason":              "HandledByKarpenter",
+	}
+	if err := p.kubeClient.List(ctx, &events, filter); err == nil {
+		for _, event := range events.Items {
+			// ignore the pod if it's already handled in 3 minute
+			if time.Now().Before(event.LastTimestamp.Time.Add(3 * time.Minute)) {
+				log.FromContext(ctx).Info(fmt.Sprintf("pod %s/%s is handled", pod.Namespace, pod.Name))
+				return true
+			}
+		}
+	} else {
+		log.FromContext(ctx).Error(err, fmt.Sprintf("failed to get event for %s/%s", pod.Namespace, pod.Name))
+	}
+	p.recorder.Publish(scheduler.PodHandledEvent(pod))
+	return false
 }
 
 func (p *Provisioner) Create(ctx context.Context, n *scheduler.NodeClaim, opts ...option.Function[LaunchOptions]) (string, error) {

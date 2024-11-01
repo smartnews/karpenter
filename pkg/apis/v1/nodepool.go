@@ -74,6 +74,12 @@ type Disruption struct {
 	// +kubebuilder:validation:Enum:={WhenEmpty,WhenEmptyOrUnderutilized}
 	// +optional
 	ConsolidationPolicy ConsolidationPolicy `json:"consolidationPolicy,omitempty"`
+	// UtilizationThreshold is defined as sum of requested resources divided by capacity
+	// below which a node can be considered for disruption.
+	// +kubebuilder:validation:Minimum:=1
+	// +kubebuilder:validation:Maximum:=100
+	// +optional
+	UtilizationThreshold *int `json:"utilizationThreshold,omitempty"`
 	// Budgets is a list of Budgets.
 	// If there are multiple active budgets, Karpenter uses
 	// the most restrictive value. If left undefined,
